@@ -1,0 +1,85 @@
+Design the high-level architecture for the tutoring platform MVP.
+The system must support:
+
+A student creating an account and completing an intake quiz
+That quiz output being used to build an initial learning profile
+
+A student opening a tutoring session and having a Socratic conversation with an AI
+
+The AI using the student's learning profile to calibrate every response
+After the session ends, the system extracting only new information from the conversation and updating the profile — not rewriting it wholesale
+
+Your job:
+
+List every major system component you think exists
+For each component, state what it does in one sentence
+Draw the data flow — in plain English or pseudocode, not a diagram tool yet — from the moment a student hits "start session" to the moment their profile is updated after the session ends
+Identify where you think the hardest architectural problems are
+
+
+
+Theme: A student creating an account and completing an intake quiz
+
+Containers:
+	"student profile"
+	"account Base" 
+	"Intake quiz base"
+	
+Logic flow:
+	"Account creation"
+	"Intake quiz Completion"
+	"Intake quiz conversion to Learning profile"
+	"Learning Profile upload to Database stored within the User account"
+	"student opening a tutoring session via button on the bottom right"
+	Conversation Logic: --> Requires specialized learning profile, ELSE: return user to be remprompted with the learning profile intake quiz
+		"Student input into text form input bar"
+		"Model output through processing the combination of language recogniton and learning profile json file"
+		"cache session storage so if the user exits the tab it will automatically export the session information to the learning profile"
+			ON EXIT: "Session converts into a summary and then Uses a differential merge to add to the learning profile"
+		"deletes the session on page refresh or tab reload"
+	"End of sessions will always result in the addition to the learning profile so ruun it asynchronously server side so nothing important gets deleted"
+		
+
+Components:
+	User: Base Profile for student(excludes the learning profile until Student is actually made)
+	Student: Contains learning profile which requires to be parsed
+	LearningProfile: Identified as a JSON or explicitely formatted XML for the science related metrics with a notes category which will be enabled to identify tone of voice.:: Store Server-Side
+	ProfileStatisticsModel: stores all relevant info for the numerics of the learning profile which can updated dynamically:: Store client Side
+	IntakeQuiz(Temporary): stored as a PreReq for creation of the user profile but after processed server side deleted because fit becomes unnecessary for memory sake
+	LLMModel: Used for swiftly parsing the user logic during the sessions, ONLY EVER USED During Sessions
+
+FunctionMap:
+	AccountBuild:
+		Params(AcountInfo)
+		ParamDescr:
+		AccountInfo:JSON of all the data gathered in the User IntakeQuiz
+		FlowLogic:
+			stores JSON
+			Parses User Info for the db table
+			Separates parses the questionaire
+			Converts to exportable data in JSON formatting
+			Calls function to build the learning profile JSON
+			Calls the function to start the User Session within the chatbot
+	
+	LearningProfileBuild:
+		Params(StringOFData)
+		ParamDescr:
+			StringOFData: contains all the data parsed from account Creation, parsable by key identifiers within the strings text, maybe by comma separated and regex previous to the ":" to identify it
+		FlowLogic:
+			parse the string according to defined categories
+			convert to the Json object
+			return the JSON
+	FNAME:
+		Params()
+		ParamDescr:
+		FlowLogic:
+	FNAME:
+		Params()
+		ParamDescr:
+		FlowLogic:
+	FNAME:
+		Params()
+		ParamDescr:
+		FlowLogic:
+	
+	
