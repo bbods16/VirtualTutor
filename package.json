@@ -1,0 +1,36 @@
+{
+	"name": "virtualtutor",
+	"version": "1.0.0",
+	"description": "Virtual Assistant that tutors students using multiple Research backed psychological statistical models and algorithims. To learn more go to the Readme Documents, there is one base and each subdirectory contains one as well",
+	"main": "index.js",
+	"scripts": {
+		"test": "vitest"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/bbods16/VirtualTutor.git"
+	},
+	"keywords": [
+		"typescript"
+	],
+	"author": "Bryson Bodner",
+	"license": "MIT",
+	"bugs": {
+		"url": "https://github.com/bbods16/VirtualTutor/issues"
+	},
+	"homepage": "https://github.com/bbods16/VirtualTutor#readme",
+	"devDependencies": {
+		"@types/node": "^25.9.2",
+		"@types/pg": "^8.20.0",
+		"prisma": "^7.8.0",
+		"tsx": "^4.22.4",
+		"typescript": "^6.0.3"
+	},
+	"dependencies": {
+		"@prisma/adapter-pg": "^7.8.0",
+		"@prisma/client": "^7.8.0",
+		"dotenv": "^17.4.2",
+		"pg": "^8.21.0"
+	},
+	"type": "module"
+}

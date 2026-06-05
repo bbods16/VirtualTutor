@@ -1,0 +1,76 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String   @id @default(uuid()) @db.Uuid
+  email         String   @unique
+  password_hash String
+  created_at    DateTime @default(now()) @db.Timestamptz
+  updated_at    DateTime @default(now()) @updatedAt @db.Timestamptz
+
+  student Student?
+}
+
+model Student {
+  id            String   @id @default(uuid()) @db.Uuid
+  user_id       String   @unique @db.Uuid
+  lp_exists     Boolean  @default(false)
+  session_count Int
+  created_at    DateTime @db.Timestamptz
+  updated_at    DateTime @updatedAt @db.Timestamptz
+
+  user             User             @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  learning_profile LearningProfile?
+  intake_quizzes   IntakeQuiz[]
+  error_logs       SystemErrorLog[]
+}
+
+model LearningProfile {
+  id            String   @id @default(uuid()) @db.Uuid
+  student_id    String   @unique @db.Uuid
+  cognitive     Json
+  behavioral    Json
+  historical    Json
+  tone_notes    String
+  last_delta_at DateTime @db.Timestamptz
+  created_at    DateTime @db.Timestamptz
+  updated_at    DateTime @updatedAt @db.Timestamptz
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+}
+
+model IntakeQuiz {
+  id                String   @id @default(uuid()) @db.Uuid
+  student_id        String   @db.Uuid
+  raw_responses     Json
+  rag_output        String
+  submitted_at      DateTime @db.Timestamptz
+  processed         Boolean
+  processing_status String   @default("Pending") @db.VarChar(50)
+
+  student Student @relation(fields: [student_id], references: [id], onDelete: Cascade)
+}
+
+model SystemErrorLog {
+  id              String   @id @default(uuid()) @db.Uuid
+  student_id      String?  @db.Uuid
+  error_component String   @db.VarChar(100)
+  error_details   String
+  is_resolved     Boolean  @default(false)
+  created_at      DateTime @default(now()) @db.Timestamptz
+
+  student Student? @relation(fields: [student_id], references: [id], onDelete: SetNull)
+
+  @@map("system_error_logs")
+}
