@@ -337,3 +337,4 @@ export class SystemErrorLog {
 		this._is_resolved = true;
 	}
 }
+export class TopicCognitiveState {}

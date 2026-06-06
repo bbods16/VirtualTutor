@@ -1,0 +1,40 @@
+First challenge — the recordFailedAttempt gap
+In LearningProfile.recordFailedAttempt you have this:
+typescriptif (this._behavioral.answerRevealPolicy === "AFTER_3_ATTEMPTS" 
+    && this._behavioral.failedAttemptsCounter >= 3) {
+    // empty
+}
+You detected the condition and left the body empty. That means the answer reveal policy is defined in the schema but never enforced anywhere in the domain layer. Who enforces it? Does the LearningProfilePromptConverter read failedAttemptsCounter and change the system prompt? Does a separate component watch for this threshold? Right now the policy exists as data but has no executor. Name the component that reads this threshold and acts on it, and describe what action it takes.
+I would like professors in the future to have access to that, so they can define to the model to pass the instruction that the answer can be shown, but since that is currently out of the scope of our projects framework we will need to develop a debugReturnAnswer Function in the next phase so we can properly debug the llm's thoughts and make sure it actually knows the correct answer, or instead we can store a new value in the table that is going to be used as metadata with the answer so admin users can see the current answer and debug if its correct or incorrect, but student visibility to that answer will only ever be possible if they answer the question correctly during the session.
+
+Second challenge — resetSessionStates is called where exactly
+resetSessionStates sets failedAttemptsCounter back to 0, scaffoldingLevel back to NONE, and socraticRatio back to 1.0. These are transient session states — they should not persist between sessions. But your toJSON method serializes the entire behavioral object including these transient fields, which means the DeltaProcessor will see them and potentially write them into the permanent LearningProfile.
+A student who ended their last session frustrated with scaffoldingLevel HIGH will start their next session with HIGH scaffolding — even if they come back fresh the next morning. Is that your intended behavior? If not, how do you separate what is transient from what is persistent in the behavioral state before the delta write happens?
+during the session state transitions we will not upload them directly to the learning profile and we will instead store 
+The Intent: Variables like failedAttemptsCounter, scaffoldingLevel, and socraticRatio are designed to be temporary. They measure how a student is doing right now in a specific study session. When a new session starts, they are supposed to start fresh.
+
+The Flaw: Your toJSON method acts as a camera, taking a snapshot of your data to save it to the database permanently. Right now, your camera is capturing everything in the behavioral object, including those temporary variables.
+
+The Consequence: Because toJSON hands those temporary variables over to the permanent database (the DeltaProcessor), the system remembers them forever. So, yesterday's temporary frustration is accidentally saved as today's permanent starting point.
+
+Your Mission: You need to figure out how to change what gets handed over to the database so that permanent traits are saved, but temporary session data is left out or ignored.
+
+When you think about the structure of that toJSON method, how might you change what it returns so the database only gets the data it actually needs to keep?
+
+
+
+
+
+
+
+Third challenge — the LearningProfilePayload vs LearningProfile class mismatch
+Your LearningProfile class has a toJSON method that returns:
+typescript{ cognitive, behavioral, historical }
+But your LearningProfilePayload interface requires schemaVersion, learnerIdentity, and toneOverride at the top level, plus a restructured behavioral with an accessibility sub-object and a tutoringControls sub-object that does not map directly to your BehavioralState interface.
+These two structures do not match. The LearningProfile class cannot produce a valid LearningProfilePayload as written. Something has to do the translation. Is that a method on the class, a separate mapper function, or is it the LearningProfilePromptConverter's responsibility to do the structural transformation before building the system prompt?
+Name the component and show me the function signature.
+
+One thing I want you to add before Phase 2 closes
+The SystemErrorLog class captures errors but student_id is nullable. That is correct for system-wide errors. But you have no link between a SystemErrorLog and the component that generated it beyond a string field error_component. This means when AssessRag fires a RAGError, you get a log row with error_component: "AssessRag" and a string in error_details. There is no structured way to query all unresolved errors for a specific component, no severity level, no retry count.
+For the MVP this is acceptable — but you need to acknowledge it as a known schema limitation. Add it to your dangerous decisions list from P2-04. State the specific failure mode it creates.
+
