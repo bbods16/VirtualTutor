@@ -206,10 +206,17 @@ describe("isDueForReview", () => {
     // Construct a state where retrievability == DUE_THRESHOLD by tuning lastReviewDate
     // We compute the required days: mastery * exp(-F * days) = DUE_THRESHOLD
     // days = -ln(DUE_THRESHOLD / mastery) / F
+    //
+    // Date only has millisecond precision, so the days -> ms -> Date -> ms -> days
+    // round trip can land fractionally past the analytical boundary in either direction.
+    // Subtract a safety margin (orders of magnitude larger than any ms-rounding error)
+    // so this test deterministically lands on the "not yet due" side of the threshold.
+    const BOUNDARY_SAFETY_MARGIN_DAYS = 1e-6;
     const forgettingRate = FORGETTING_RATE["identification"];
-    const targetDays = -Math.log(DUE_THRESHOLD / baseState.masteryProbability) / forgettingRate;
+    const targetDays = -Math.log(DUE_THRESHOLD / baseState.masteryProbability) / forgettingRate
+      - BOUNDARY_SAFETY_MARGIN_DAYS;
     const dateAtThreshold: FsrsMemoryState = { ...baseState, lastReviewDate: daysAgo(targetDays) };
-    // At exactly the threshold the formula returns DUE_THRESHOLD, which is NOT < DUE_THRESHOLD
+    // At (just under) the threshold the formula returns >= DUE_THRESHOLD, which is NOT < DUE_THRESHOLD
     expect(isDueForReview(dateAtThreshold, NOW)).toBe(false);
   });
 

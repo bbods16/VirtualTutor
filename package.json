@@ -4,7 +4,8 @@
 	"description": "Virtual Assistant that tutors students using multiple Research backed psychological statistical models and algorithims. To learn more go to the Readme Documents, there is one base and each subdirectory contains one as well",
 	"main": "index.js",
 	"scripts": {
-		"test": "vitest"
+		"test": "vitest",
+		"verify:parity": "node scripts/verify-parity.mjs"
 	},
 	"repository": {
 		"type": "git",
@@ -19,6 +20,9 @@
 		"url": "https://github.com/bbods16/VirtualTutor/issues"
 	},
 	"homepage": "https://github.com/bbods16/VirtualTutor#readme",
+	"engines": {
+		"node": ">=20 <21"
+	},
 	"devDependencies": {
 		"@types/node": "^25.9.2",
 		"@types/pg": "^8.20.0",
