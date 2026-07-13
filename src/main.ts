@@ -21,6 +21,7 @@ import {
   computeScaffoldingAndTone,
   MAX_ATTEMPTS_BEFORE_FRUSTRATION,
 } from "@algorithms/DSR/DynamicScaffolding.ts";
+import { appendExchangeTurn, hasExceededFailureBudget } from "./SessionLoopGuards.ts";
 
 // Load .env from the working directory (works for both tsx dev-run and the bundled executable)
 config();
@@ -76,6 +77,19 @@ const MASTERY_ANNOUNCEMENT_CONSECUTIVE = 2;
  *  never matches (DSR audit: the loop previously had no upper bound at all). */
 const HARD_ATTEMPT_CEILING = 6;
 
+/** Hard ceiling on a single streaming request before it's aborted as hung — guards against a
+ *  connection that stalls with no data and no error, which would otherwise block the REPL
+ *  indefinitely since nothing ever throws to trigger the catch block. */
+const STREAM_TIMEOUT_MS = 30_000;
+
+/** Consecutive API failures (errors or stream timeouts) before ending the session rather than
+ *  retrying forever against a dead connection. */
+const MAX_CONSECUTIVE_API_FAILURES = 3;
+
+/** Cap on retained transcript lines per problem so a stuck loop (API down, student stuck) can't
+ *  grow the in-memory buffer without bound for the lifetime of a single problem. */
+const MAX_RECENT_EXCHANGE_LINES = 20;
+
 /** Normalize a free-text answer for comparison: lowercase, strip whitespace, and drop a
  *  leading "x=" / "y=" style variable-assignment prefix so "x = 2", "x=2", and "2" all match. */
 function normalizeAnswer(rawAnswer: string): string {
@@ -109,6 +123,26 @@ function printMasterySummary(profile: LearningProfileStore): void {
     console.log(`  ${skillId.padEnd(22)} ${bar}  ${percentage}%`);
   }
   console.log("-------------------------------\n");
+}
+
+/** Shared shutdown path for every way the REPL can end: student typed "quit", all problems
+ *  completed, the API circuit breaker tripped, or a SIGINT arrived. Always releases the
+ *  readline handle even if finalizing the profile throws, so a save failure can't leave the
+ *  process hanging on an open stdin handle. */
+async function endSessionGracefully(
+  session:    Session,
+  sessionSvc: SessionService,
+  finalSvc:   FinalizerService,
+  profileSvc: ProfileService,
+  profile:    LearningProfileStore,
+  readline:   rl.Interface,
+): Promise<void> {
+  try {
+    await finalizeAndUpdate(session, sessionSvc, finalSvc, profileSvc, profile);
+    printMasterySummary(profile);
+  } finally {
+    readline.close();
+  }
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -148,7 +182,35 @@ async function main(): Promise<void> {
   let attemptsThisStep  = 0;
   let currentTier: 0 | 1 | 2 | 3 = 0;
   let consecutiveCorrect = 0;
+  let consecutiveApiFailures = 0;
   const recentExchangeLines: string[] = [];
+
+  // Ctrl+C must still save the calculated state updates, not just kill the process. A TTY
+  // stdin puts readline in raw mode, which suppresses the OS-level SIGINT normally delivered
+  // to `process` and instead emits 'SIGINT' on the Interface itself; non-interactive (piped)
+  // stdin does the opposite. Register on whichever one will actually fire.
+  let sigintReceived = false;
+  const handleInterrupt = (): void => {
+    if (sigintReceived) {
+      // A second Ctrl+C means the graceful save below is stuck (e.g. same dead network that
+      // caused the API failures) — stop waiting on it and exit immediately.
+      process.exit(130);
+    }
+    sigintReceived = true;
+    console.log("\n\nInterrupted — saving progress before exit...");
+    endSessionGracefully(session, sessionSvc, finalSvc, profileSvc, profile, readline)
+      .catch((shutdownError: unknown) => {
+        console.error("Failed to persist final profile state:", shutdownError);
+      })
+      .finally(() => {
+        process.exit(130);
+      });
+  };
+  if (input.isTTY) {
+    readline.on("SIGINT", handleInterrupt);
+  } else {
+    process.on("SIGINT", handleInterrupt);
+  }
 
   // ── REPL ─────────────────────────────────────────────────────────────────
 
@@ -165,9 +227,7 @@ async function main(): Promise<void> {
       const studentInput = rawInput.trim();
 
       if (studentInput.toLowerCase() === "quit" || studentInput.toLowerCase() === "exit") {
-        await finalizeAndUpdate(session, sessionSvc, finalSvc, profileSvc, profile);
-        printMasterySummary(profile);
-        readline.close();
+        await endSessionGracefully(session, sessionSvc, finalSvc, profileSvc, profile, readline);
         return;
       }
 
@@ -243,23 +303,25 @@ async function main(): Promise<void> {
 
       const systemWithTierPolicy = envelope.systemPrompt + `\n\nHINT POLICY FOR THIS TURN: ${tierInstruction}`;
 
-      // Call Claude (streaming)
+      // Call Claude (streaming), bounded by a hard timeout so a connection that stalls with no
+      // data and no error can't hang the REPL forever.
       process.stdout.write("\n  Tutor: ");
       let assistantReply = "";
 
-      try {
-        const stream = anthropic.messages.stream({
-          model:      "claude-haiku-4-5-20251001",
-          max_tokens: 512,
-          system:     systemWithTierPolicy,
-          messages: [
-            {
-              role:    "user",
-              content: `${envelope.userPrompt}\n\nStudent's latest answer: ${studentInput}`,
-            },
-          ],
-        });
+      const stream = anthropic.messages.stream({
+        model:      "claude-haiku-4-5-20251001",
+        max_tokens: 512,
+        system:     systemWithTierPolicy,
+        messages: [
+          {
+            role:    "user",
+            content: `${envelope.userPrompt}\n\nStudent's latest answer: ${studentInput}`,
+          },
+        ],
+      });
+      const streamTimeoutHandle = setTimeout(() => stream.controller.abort(), STREAM_TIMEOUT_MS);
 
+      try {
         for await (const chunk of stream) {
           if (
             chunk.type === "content_block_delta" &&
@@ -270,9 +332,27 @@ async function main(): Promise<void> {
           }
         }
         console.log("\n");
+        consecutiveApiFailures = 0;
       } catch (apiError) {
-        console.error("\n  [API ERROR]", apiError);
+        const timedOut = stream.controller.signal.aborted;
+        if (timedOut) {
+          console.error(`\n  [TIMEOUT] No response within ${STREAM_TIMEOUT_MS / 1000}s.`);
+        } else {
+          console.error("\n  [API ERROR]", apiError);
+        }
         assistantReply = "I encountered an issue. Please try again.";
+        consecutiveApiFailures++;
+      } finally {
+        clearTimeout(streamTimeoutHandle);
+      }
+
+      if (hasExceededFailureBudget(consecutiveApiFailures, MAX_CONSECUTIVE_API_FAILURES)) {
+        console.error(
+          `\n  The tutor service failed ${MAX_CONSECUTIVE_API_FAILURES} times in a row. ` +
+          "Ending the session and saving progress.\n",
+        );
+        await endSessionGracefully(session, sessionSvc, finalSvc, profileSvc, profile, readline);
+        return;
       }
 
       // Validate the response and log the assistant turn
@@ -284,8 +364,7 @@ async function main(): Promise<void> {
         role: "assistant", eventType: "message", content: assistantReply,
       });
 
-      recentExchangeLines.push(`Student: ${studentInput}`);
-      recentExchangeLines.push(`Tutor: ${assistantReply}`);
+      appendExchangeTurn(recentExchangeLines, studentInput, assistantReply, MAX_RECENT_EXCHANGE_LINES);
 
       // Fallback for problems without a teacher-provided expected answer: no ground truth
       // exists before the model replies, so detect confirmation from the tutor's reply text.
@@ -359,9 +438,7 @@ async function main(): Promise<void> {
   }
 
   console.log("\nAll problems completed.");
-  await finalizeAndUpdate(session, sessionSvc, finalSvc, profileSvc, profile);
-  printMasterySummary(profile);
-  readline.close();
+  await endSessionGracefully(session, sessionSvc, finalSvc, profileSvc, profile, readline);
 }
 
 main().catch((error: unknown) => {
